@@ -537,7 +537,14 @@ namespace Cpu {
 	vector<Draw::Graph> gpu_temp_graphs;
 	vector<Draw::Graph> gpu_mem_graphs;
 
-    string draw(const cpu_info& cpu, const vector<Gpu::gpu_info>& gpus, bool force_redraw, bool data_same) {
+    string draw(
+		const cpu_info& cpu,
+#if defined(GPU_SUPPORT)
+		const vector<Gpu::gpu_info>& gpus,
+#endif // GPU_SUPPORT
+		bool force_redraw,
+		bool data_same
+	) {
 		if (Runner::stopping) return "";
 		if (force_redraw) redraw = true;
 		bool show_temps = (Config::getB("check_temp") and got_sensors);
@@ -545,14 +552,12 @@ namespace Cpu {
 		auto single_graph = Config::getB("cpu_single_graph");
 		bool hide_cores = show_temps and (cpu_temp_only or not Config::getB("show_coretemp"));
 		const int extra_width = (hide_cores ? max(6, 6 * b_column_size) : (b_columns == 1 && !show_temps) ? 8 : 0);
-	#ifdef GPU_SUPPORT
+#if defined(GPU_SUPPORT)
 		const auto& show_gpu_info = Config::getS("show_gpu_info");
 		const bool gpu_always = show_gpu_info == "On";
 		const bool gpu_auto = show_gpu_info == "Auto";
 		const bool show_gpu = (gpus.size() > 0 and (gpu_always or (gpu_auto and Gpu::shown < Gpu::count)));
-	#else
-		(void)gpus;
-	#endif
+#endif // GPU_SUPPORT
 		auto graph_up_field = Config::getS("cpu_graph_upper");
 		if (graph_up_field == "Auto" or not v_contains(Cpu::available_fields, graph_up_field))
 			graph_up_field = "total";
@@ -594,7 +599,7 @@ namespace Cpu {
 			out += Mv::to(button_y, x + 10) + title_left + Theme::c("hi_fg") + Fx::b + 'm' + Theme::c("title") + "enu" + Fx::ub + title_right;
 			Input::mouse_mappings["m"] = {button_y, x + 11, 1, 4};
 			out += Mv::to(button_y, x + 16) + title_left + Theme::c("hi_fg") + Fx::b + 'p' + Theme::c("title") + "reset "
-				+ (Config::current_preset < 0 ? "*" : to_string(Config::current_preset)) + Fx::ub + title_right;
+				+ (!Config::current_preset.has_value() ? "*" : to_string(Config::current_preset.value())) + Fx::ub + title_right;
 			Input::mouse_mappings["p"] = {button_y, x + 17, 1, 8};
 			const string update = to_string(Config::getI("update_ms")) + "ms";
 			out += Mv::to(button_y, x + width - update.size() - 8) + title_left + Fx::b + Theme::c("hi_fg") + "- " + Theme::c("title") + update
@@ -884,12 +889,30 @@ namespace Cpu {
 			out += rjust(to_string(safeVal(cpu.core_percent, n).back()), (b_column_size < 2 ? 3 : 4)) + Theme::c(enabled ? "main_fg" : "inactive_fg") + '%';
 
 			if (show_temps and not hide_cores) {
-				const auto [temp, unit] = celsius_to(safeVal(cpu.temp, n+1).back(), temp_scale);
-				const auto temp_color = enabled ? Theme::g("temp").at(clamp(safeVal(cpu.temp, n+1).back() * 100 / cpu.temp_max, 0ll, 100ll)) : Theme::c("inactive_fg");
-				if (b_column_size > 1 and std::cmp_greater_equal(temp_graphs.size(), n))
-					out += ' ' + Theme::c("inactive_fg") + graph_bg * 5 + Mv::l(5)
-						+ temp_graphs.at(n+1)(safeVal(cpu.temp, n+1), data_same or redraw);
-				out += temp_color + rjust(to_string(temp), 4) + Theme::c(enabled ? "main_fg" : "inactive_fg") + unit;
+				const auto core_temps = safeVal(cpu.temp, n + 1);
+				if (!core_temps.empty()) {
+					// FIXME: This should be checked during collection and just not be made available with
+					// something like `std::nullopt`.
+					const auto last_temp = core_temps.back();
+					const auto [temp, unit] = celsius_to(last_temp, temp_scale);
+					const auto temp_color = enabled ? Theme::g("temp").at(clamp(last_temp * 100 / cpu.temp_max, 0ll, 100ll)) : Theme::c("inactive_fg");
+					if (b_column_size > 1 and std::cmp_greater_equal(temp_graphs.size(), n)) {
+						fmt::format_to(
+							std::back_inserter(out),
+							" {}{}{}{}", Theme::c("inactive_fg"),
+							graph_bg * 5, Mv::l(5),
+							temp_graphs.at(n + 1)(core_temps, data_same || redraw)
+						);
+					}
+					fmt::format_to(
+						std::back_inserter(out),
+						"{}{}{}{}",
+						temp_color,
+						rjust(std::to_string(temp), 4),
+						Theme::c(enabled ? "main_fg" : "inactive_fg"),
+						unit
+					);
+				}
 			}
 
 			out += Theme::c("div_line") + Symbols::v_line;
@@ -1163,7 +1186,7 @@ namespace Gpu {
 #endif
 
 namespace Mem {
-	int width_p = 45, height_p = 36;
+	int width_p = 45, height_p = 40;
 	int min_width = 36, min_height = 10;
 	int x = 1, y, width = 20, height;
 	int mem_width, disks_width, divider, item_height, mem_size, mem_meter, graph_height, disk_meter;
@@ -1429,7 +1452,7 @@ namespace Mem {
 }
 
 namespace Net {
-	int width_p = 45, height_p = 32;
+	int width_p = 45, height_p = 28;
 	int min_width = 36, min_height = 6;
 	int x = 1, y, width = 20, height;
 	int b_x, b_y, b_width, b_height, d_graph_height, u_graph_height;
